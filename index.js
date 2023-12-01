@@ -1,7 +1,9 @@
 // Imports and Inits
-const fs = require('fs');
+const fs = require('node:fs');
+const path = require('node:path');
 require('dotenv').config();
-const { Client, GatewayIntentBits, Partials, Collection } = require('discord.js');
+const { clientId, guildId, token } = require('./config.json');
+const { Client, GatewayIntentBits, Partials, Collection, Events, User } = require('discord.js');
 
 const prefix = process.env.PREFIX;
 const client = new Client({ intents: [
@@ -15,44 +17,61 @@ const client = new Client({ intents: [
 client.commands = new Collection();
 
 // Read in all different command files in the commands folder
-const commandFiles = fs.readdirSync('./commands').filter(file => file.endsWith('.js'));
-for (const file of commandFiles) {
-	const command = require(`./commands/${file}`);
-	client.commands.set(command.name, command);
-    // console.log(command.name); check that all commands are registered
+const foldersPath = path.join(__dirname, 'commands');
+const commandFolders = fs.readdirSync(foldersPath);
+
+for (const folder of commandFolders) {
+	const commandsPath = path.join(foldersPath, folder);
+	const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));
+	for (const file of commandFiles) {
+		const filePath = path.join(commandsPath, file);
+		const command = require(filePath);
+		// Set a new item in the Collection with the key as the command name and the value as the exported module
+		if ('data' in command && 'execute' in command) {
+			client.commands.set(command.data.name, command);
+		} else {
+			console.log(`[WARNING] The command at ${filePath} is missing a required "data" or "execute" property.`);
+		}
+	}
 }
 
 
 
 // Announce login and ready to go
-client.on('ready', () => {
-    console.log(`Logged in as ${client.user.tag}!`);
+client.once(Events.ClientReady, readyClient => {
+    console.log(`Logged in as ${readyClient.user.tag}!`);
+});
+
+// Retrieve Slash Commands
+client.on(Events.InteractionCreate, interaction => {
+	if (!interaction.isChatInputCommand()) return;
+	console.log(interaction);
 });
 
 // On message created event
-client.on('messageCreate', (msg) => {
-    // Check that the message is a command from the user
-    if (msg.content.indexOf(prefix) !== 0 || msg.author.bot) {
-        //console.log(`Message not for me! ${msg.content.indexOf(prefix)}`);
-        return;
-    }
+client.on(Events.InteractionCreate, async interaction => {
+    if (!interaction.isChatInputCommand()) return;
 
-    // Trim off the prefix and split the args out
-    const args = msg.content.slice(prefix.length).trim().split(/ +/);
-    const command = args.shift().toLowerCase();
+	const command = interaction.client.commands.get(interaction.commandName);
 
-    // Check if the command actually exists
-    if(!client.commands.has(command)) return;
+	if (!command) {
+		console.error(`No command matching ${interaction.commandName} was found.`);
+		return;
+	}
 
-    try {
-        client.commands.get(command).execute(msg, args);
-    } catch (error) {
-        console.error(error);
-        msg.reply('There was an error trying to execute this command. Type "!chance help" for a list of valid commands!');
-    }
+	try {
+		await command.execute(interaction);
+	} catch (error) {
+		console.error(error);
+		if (interaction.replied || interaction.deferred) {
+			await interaction.followUp({ content: 'There was an error while executing this command!', ephemeral: true });
+		} else {
+			await interaction.reply({ content: 'There was an error while executing this command!', ephemeral: true });
+		}
+	}
 });
 
 
 
 // Should remain final line 
-client.login(process.env.CLIENT_TOKEN);
+client.login(token);
